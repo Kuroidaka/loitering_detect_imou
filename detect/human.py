@@ -82,10 +82,7 @@ class HumanDetector:
                 annotated     = self._annotate_tracking(
                     annotated, tracked, yolo_results, trace_data, fps, m_per_px
                 )
-                
 
-                
-                
             else:
                 annotated = self._draw_raw_boxes(annotated, yolo_results)
 

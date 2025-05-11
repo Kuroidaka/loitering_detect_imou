@@ -1,6 +1,8 @@
 import threading
 from typing import List, Tuple
 import math
+import numpy as np 
+import cv2
 
 def run_in_thread(target_func, *args, **kwargs):
     """
@@ -46,3 +48,32 @@ def compute_speeds(
     avg_speed = sum(speeds) / len(speeds)
     min_speed = min(speeds)
     return avg_speed, min_speed
+
+
+
+def draw_dashed_polygon(img, pts, color, thickness=2, dash_length=20):
+    """
+    Draws a closed, dashed polygon on img.
+    - pts: list of (x,y) tuples
+    - dash_length: approximate length of each drawn segment (in px).
+    """
+    pts = [np.array(p, dtype=np.int32) for p in pts]
+    n = len(pts)
+    for i in range(n):
+        p1, p2 = pts[i], pts[(i+1)%n]
+        # vector from p1 to p2
+        v = p2 - p1
+        dist = int(np.hypot(*(v)))
+        # how many full dashes fit
+        num_dashes = max(dist // dash_length, 1)
+        # draw alternating segments
+        for j in range(num_dashes):
+            start = p1 + (v * (j / num_dashes))
+            end   = p1 + (v * ((j + 0.5) / num_dashes))
+            cv2.line(
+                img,
+                tuple(start.astype(int)),
+                tuple(end.astype(int)),
+                color,
+                thickness,
+            )
