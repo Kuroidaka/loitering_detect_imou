@@ -6,6 +6,8 @@ class Settings(BaseSettings):
     CAMERA_IP: str = Field(env="CAMERA_IP", default="", description="Camera's ip in local network")
     CAMERA_USERNAME: str = Field(env="CAMERA_USERNAME", default="", description="username to access camera")
     CAMERA_PASSWORD: str = Field(env="CAMERA_PASSWORD", default="", description="password to access camera")
+    MIN_SPEED_TO_BE_LOITERING: float = Field(env="MIN_SPEED_TO_BE_LOITERING", default=0.3, description="password to access camera")
+    
     class Config:
         validate_assignment = True
         case_sensitive = True

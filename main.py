@@ -36,6 +36,37 @@ def wait_for_frame(grabber, timeout: float = 5.0):
             raise RuntimeError("Timed out waiting for first frame")
         time.sleep(0.05)
 
+def pause_for_frame_draw(grabber, timeout: float = 5.0):
+    """
+    Pause the grabber thread and grab a single frame from its open VideoCapture.
+    """
+    # 1) Pause background grabbing (but keep cap open)
+    grabber.pause()
+
+    cap = grabber.cap
+    if cap is None:
+        raise RuntimeError("VideoCapture has been closed!")
+
+    # 2) Rewind to start if it's a file
+    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+
+    # 3) Read one frame (with timeout)
+    start = time.time()
+    while True:
+        ret, frame = cap.read()
+        if ret:
+            break
+        if time.time() - start > timeout:
+            raise RuntimeError("Timed out waiting for first frame from source")
+        time.sleep(0.05)
+
+    # 4) Resume background grabbing
+    grabber.start()
+
+    return frame
+
+
+
 def main():
     # 1) Start grabbing frames
     grabber = FrameGrabber(settings.RTSP_URL)
@@ -58,7 +89,7 @@ def main():
         "custom": {
             "model_path": "./model/custom.pt"
         }
-    })
+    }, zone_pts=zone.pts)
 
     # 5) Renderer for overlays
     renderer = OverlayRenderer(zone.pts)

@@ -52,7 +52,7 @@ class HumanDetector:
         self.edge_annotator   = sv.EdgeAnnotator()  if enable_keypoints else None
         self.vertex_annotator = sv.VertexAnnotator()if enable_keypoints else None
     def detect_humans(
-        self, frame: np.ndarray, fps: float, m_per_px: float
+        self, frame: np.ndarray, fps: float, m_per_px: float, zone_pts:list[tuple[int,int]]
     ) -> Tuple[np.ndarray, List[TraceData]]:
         """
         Runs person detection → optional tracking → optional keypoints.
@@ -192,14 +192,12 @@ class HumanDetector:
 
     # ─── JSON export ────────────────────────────────────────────────────────
 
-    def save_trace_json(
-        self,
-        trace_data: List[Dict],
-        path: str = 'trace_data.json'
-    ):
+    def save_trace_json(self, trace_data: List[dict], path='trace_data.json'):
         try:
+            # turn each TraceData into a dict
+            json_ready = [td.__dict__ for td in trace_data]
             with open(path, 'w') as f:
-                json.dump(trace_data, f, indent=2)
+                json.dump(json_ready, f, indent=2)
             logging.info(f"Trace data written to {path}")
         except Exception as e:
             logging.error(f"Failed to write trace JSON: {e}")

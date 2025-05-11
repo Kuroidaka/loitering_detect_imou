@@ -13,10 +13,15 @@ class TraceData(BaseModel):
     class_name: str = Field(..., alias="class")  # original key 'class'
     bbox: List[int]                              # [x1, y1, x2, y2]
     confidence: float
-    trace: List[Tuple[int, int]]                 # list of centroids (cx, cy)
     avg_speed: Optional[float] = None
     min_speed: Optional[float] = None
+    
+    dwell_time: Optional[float] = None
+    pause_duration: Optional[float] = None
+    movement_radius: Optional[float] = None
+    path_variance: Optional[float] = None
     loitering: bool = False
+    trace: List[Tuple[int, int]]                 # list of centroids (cx, cy)
 
     class Config:
         validate_by_name = True
