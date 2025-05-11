@@ -4,7 +4,7 @@ import cv2
 import numpy as np
 from onvif import ONVIFCamera
 from pynput import keyboard
-
+from config import settings
 
 class PTZController:
     def __init__(self, ip, port, username, password):
@@ -74,7 +74,7 @@ class PTZController:
 
 def run_ptz_if_enabled(enable_control=True):
     if enable_control:
-        ptz = PTZController(ip='192.168.1.12', port=80, username='admin', password='Kuroidaka123')
+        ptz = PTZController(ip=settings.CAMERA_IP, port=80, username=settings.CAMERA_USERNAME, password=settings.CAMERA_PASSWORD)
         ptz.control_loop()
     else:
         print("PTZ control disabled.")
