@@ -1,0 +1,97 @@
+# Python compiled files
+*.pyc
+*.pyo
+*.pyd
+__pycache__/
+*.swp
+*.swo
+*.bak
+*.log
+
+# Virtual environment
+venv/
+env/
+ENV/
+.venv/
+.ENV/
+venv_test/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# FastAPI-specific
+*.sqlite3
+*.db
+instance/
+config.json
+*.env
+*.secrets
+.env.*
+.envrc
+.vscode/
+
+# Logs and debugging files
+logs/
+*.log
+debug.log
+nohup.out
+
+# Cache and temporary files
+.cache/
+*.egg-info/
+dist/
+build/
+pip-wheel-metadata/
+site/
+__pycache__/
+*.mypy_cache/
+*.pytest_cache/
+.coverage
+.tox/
+*.lock
+
+# Testing tools
+htmlcov/
+*.coverage
+.coverage.*
+.cache/
+.nox/
+.pytest_cache/
+__pycache__/
+
+# IDE/Editor files
+.idea/
+.vscode/
+*.iml
+*.sublime-project
+*.sublime-workspace
+
+# macOS and Windows specific
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Docker and container tools
+docker-compose.override.yml
+docker-compose.prod.yml
+.dockerignore
+.dockercache/
+
+# Deployment
+*.pem
+*.key
+.secrets/
+keyfile.json
+
+# Other files to exclude
+*.~*
+~$*
+*.bak
+logs
+
+
+assets
+
+stream.log
+
+model
