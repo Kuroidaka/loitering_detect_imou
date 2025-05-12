@@ -1,10 +1,6 @@
-import cv2
 from typing import List, Dict, Tuple, Optional
-
-
 from pydantic import BaseModel, Field
 from typing import List, Tuple
-
 class TraceData(BaseModel):
     """
     Schema for individual trace records of tracked humans.
@@ -15,23 +11,25 @@ class TraceData(BaseModel):
     confidence: float
     avg_speed: Optional[float] = None
     min_speed: Optional[float] = None
+    rule_loiter: bool = False
+    raw_loiter_score: float = 0.0
+    is_loitering: bool = False
     
     dwell_time: Optional[float] = None
     pause_duration: Optional[float] = None
     movement_radius: Optional[float] = None
     path_variance: Optional[float] = None
-    loitering: bool = False
     trace: List[Tuple[int, int]]                 # list of centroids (cx, cy)
 
     class Config:
         validate_by_name = True
-        json_schema_extra = {
-            "example": {
-                "id": 28,
-                "class": "person",
-                "bbox": [852, 4, 2298, 1285],
-                "confidence": 0.9013750553131104,
-                "trace": [[2238, 651], [2240, 650], ...],
-                "loitering": False
-            }
-        }
+        # json_schema_extra = {
+        #     "example": {
+        #         "id": 28,
+        #         "class": "person",
+        #         "bbox": [852, 4, 2298, 1285],
+        #         "confidence": 0.9013750553131104,
+        #         "trace": [[2238, 651], [2240, 650], ...],
+        #         "loitering": False
+        #     }
+        # }

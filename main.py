@@ -83,7 +83,7 @@ def main():
     # 4) Detector service (you can pass model paths via settings or config)
     detector = DetectorService({
         "human": {
-            "model_path": "./model/yolov8n.pt",
+            "model_path": "./model/yolov8s.pt",
             "pose_model_path": "./model/yolov8m-pose.pt"
         },
         "custom": {

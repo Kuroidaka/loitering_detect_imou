@@ -12,14 +12,13 @@ import supervision as sv
 
 from common_model import TraceData
 from .behavior import BehaviourDetector
-from utils import compute_speeds
 
 logging.basicConfig(filename='stream.log', level=logging.INFO)
 
 class HumanDetector:
     def __init__(
         self,
-        model_path: str = '/model/yolov8n.pt',
+        model_path: str = '/model/yolov8s.pt',
         pose_model_path: str = '/model/yolov8m-pose.pt',
         enable_tracking: bool = True,
         enable_keypoints: bool = False
@@ -32,7 +31,7 @@ class HumanDetector:
         self.det_model  = YOLO(model_path)
         
         self.pose_model = YOLO(pose_model_path) if enable_keypoints else None
-        self.behaviour_detector = BehaviourDetector(loiter_max_disp=50, loiter_min_frames=30)
+        self.behaviour_detector = BehaviourDetector()
 
         # Tracking components
         self.smoother         = sv.DetectionsSmoother()
@@ -43,7 +42,7 @@ class HumanDetector:
             text_thickness = 2,    
         )if enable_tracking else None
         self.trace_annotator  = sv.TraceAnnotator(
-            trace_length = 300,
+            trace_length = 1000,
             thickness = 10,
             )if enable_tracking else None
         self.track_histories  = {}                 # tid → list of centroids
@@ -146,7 +145,7 @@ class HumanDetector:
         labels = []
         for entry, cid in zip(trace_data, tracked.class_id):
         
-            avg, mn = compute_speeds(entry.trace, fps=fps, m_per_px=m_per_px)
+            avg, mn = self.behaviour_detector.compute_speeds(entry.trace, fps=fps, m_per_px=m_per_px)
             print(f"Average speed = {avg:.2f} m/s, Minimum speed = {mn:.2f} m/s")
             speed = avg or 0.0
             labels.append(

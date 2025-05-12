@@ -1,9 +1,14 @@
 import cv2
 import math
 import numpy as np
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Any
 from common_model import TraceData
 from datetime import datetime
+import time
+
+from utils import save_dicts_to_json
+from .score_stableizer import ScoreStabilizer
+
 class BehaviourDetector:
     """
     Analyze tracked object traces to detect behaviors such as loitering,
@@ -33,16 +38,9 @@ class BehaviourDetector:
     }
 
     def __init__(
-        self,
-        loiter_max_disp: int = 50,
-        loiter_min_frames: int = 30
+        self
     ):
-        """
-        :param loiter_max_disp:   Pixel threshold for loiter-box detection
-        :param loiter_min_frames: Frames window for loiter detection
-        """
-        self.loiter_max_disp   = loiter_max_disp
-        self.loiter_min_frames = loiter_min_frames
+        self.stabilizer = ScoreStabilizer()
 
     def _get_time_mode(self) -> str:
         """
@@ -52,9 +50,13 @@ class BehaviourDetector:
         h = datetime.now().hour
         return 'night' if (h < 6 or h >= 20) else 'day'
 
-    def is_loitering(
+    def is_loitering_by_rule(
         self,
-        entry: TraceData
+        dwell_time: float,
+        movement_radius: float,
+        avg_speed: float,
+        pause_duration: float,
+        path_variance: float
     ) -> bool:
         """
         Rule-based loitering with day/night thresholds: must meet at least two criteria.
@@ -62,17 +64,20 @@ class BehaviourDetector:
         mode = self._get_time_mode()
         t = self.THRESHOLDS[mode]
         conds = [
-            entry.dwell_time >= t['dwell_time'],
-            entry.pause_duration >= t['pause_duration'],
-            entry.movement_radius <= t['movement_radius'],
-            entry.avg_speed <= t['avg_speed'],
-            entry.path_variance <= t['path_variance']
+            dwell_time >= t['dwell_time'],
+            pause_duration >= t['pause_duration'],
+            movement_radius <= t['movement_radius'],
+            avg_speed <= t['avg_speed'],
+            path_variance <= t['path_variance']
         ]
         return sum(conds) >= 2
 
-    def compute_loiter_score(
+    def compute_raw_loiter_score(
         self,
-        entry: TraceData
+        dwell_time: float,
+        movement_radius: float,
+        avg_speed: float,
+        pause_duration: float
     ) -> float:
         """
         Score-based loitering metric with day/night weights.
@@ -85,22 +90,31 @@ class BehaviourDetector:
         Vmin = cfg['avg_speed']
         Pmax = cfg['pause_duration']
         # normalize
-        t_norm = min(entry.dwell_time / Tmax, 1.0)
-        r_norm = max(1.0 - entry.movement_radius / Rmax, 0.0)
-        v_norm = max(1.0 - entry.avg_speed / Vmin, 0.0)
-        p_norm = min(entry.pause_duration / Pmax, 1.0)
+        t_norm = min(dwell_time / Tmax, 1.0)
+        r_norm = max(1.0 - movement_radius / Rmax, 0.0)
+        v_norm = max(1.0 - avg_speed / Vmin, 0.0)
+        p_norm = min(pause_duration / Pmax, 1.0)
         return wT*t_norm + wR*r_norm + wV*v_norm + wP*p_norm
 
-    def is_loitering_score(
+    def check_loitering(
         self,
-        entry: TraceData
+        id: int,
+        raw_loiter_score: float
     ) -> bool:
-        """
-        Flag loitering if composite score exceeds threshold for current day/night.
-        """
-        mode = self._get_time_mode()
-        thresh = self.THRESHOLDS[mode]['score_thresh']
-        return self.compute_loiter_score(entry) >= thresh
+        now = time.time()
+
+        final_loiter = self.stabilizer.update(
+            id, raw_loiter_score, timestamp=now
+        )
+        return final_loiter
+
+    # def check_loitering(self, raw_loiter_score: float) -> bool:
+    #     """
+    #     Flag loitering if composite score exceeds threshold for current day/night.
+    #     """
+    #     mode = self._get_time_mode()
+    #     thresh = self.THRESHOLDS[mode]['score_thresh']
+    #     return raw_loiter_score >= thresh
     
     def compute_speed_list(
         self,
@@ -216,48 +230,52 @@ class BehaviourDetector:
     
     def analyze_behaviour(
         self,
-        trace_data: List[TraceData],
+        entry: TraceData,
         fps: float,
         zone_pts: List[Tuple[int, int]],
         v_min: float,
         m_per_px: float
-    ) -> List[dict]:
+    ) -> TraceData:
         """
-        Annotate each TraceData with dwell_time, pause_duration, loitering,
-        and speed statistics.
-        :param trace_data:  list of TraceData models
-        :param fps:         video frame rate
-        :param zone_pts:    polygon vertices defining the zone
-        :param v_min:       speed threshold (m/s) below which counts as pause
-        :param m_per_px:    meter-per-pixel calibration
+        Compute all metrics for a single TraceData entry, return updated model.
         """
-        annotated: List[dict] = []
-        for entry in trace_data:
-            history = entry.trace
-            dwell  = self.compute_dwell_time(history, fps, zone_pts)
-            pause  = self.compute_pause_duration(history, fps, v_min, m_per_px)
-            # loiter = self.is_loitering(history)
-            avg_spd, min_spd = self.compute_speeds(history, fps, m_per_px)
-            
-            radius     = self.compute_movement_radius(history, m_per_px)
-            variance   = self.compute_path_variance(history, m_per_px)
+        history = entry.trace
+        dwell     = self.compute_dwell_time(history, fps, zone_pts)
+        pause     = self.compute_pause_duration(history, fps, v_min, m_per_px)
+        avg_spd, min_spd = self.compute_speeds(history, fps, m_per_px)
+        radius    = self.compute_movement_radius(history, m_per_px)
+        variance  = self.compute_path_variance(history, m_per_px)
+        raw_loiter_score =self.compute_raw_loiter_score(
+            dwell_time=dwell,
+            movement_radius=radius,
+            avg_speed=avg_spd,
+            pause_duration=pause
+        )
+        
+        is_loitering = self.check_loitering(
+            id=entry.id,
+            raw_loiter_score=raw_loiter_score
+        )
+        
+        rule_flag  = self.is_loitering_by_rule(
+            dwell_time=dwell,
+            movement_radius=radius,
+            avg_speed=avg_spd,
+            pause_duration=pause,
+            path_variance=variance                                       
+        )
+        # first update numeric metrics
+        upd = entry.model_copy(update={
+            "raw_loiter_score": raw_loiter_score,
+            "is_loitering": is_loitering,
+            'rule_loiter': rule_flag,
+            'dwell_time': dwell,
+            'pause_duration': pause,
+            'avg_speed': avg_spd,
+            'min_speed': min_spd,
+            'movement_radius': radius,
+            'path_variance': variance
+        })
 
-            updated = entry.model_copy(update={
-                'dwell_time': dwell,
-                'pause_duration': pause,
-                'avg_speed': avg_spd,
-                'min_speed': min_spd,
-                'movement_radius': radius,
-                'path_variance': variance
-            })
 
-            # **NEW**: apply the two decision functions
-            rule_flag  = self.is_loitering(updated)
-            score_flag = self.is_loitering_score(updated)
-
-            updated = updated.model_copy(update={
-                'rule_loiter': rule_flag,
-                'score_loiter': score_flag
-            })
-            annotated.append(updated)
-        return annotated
+        return upd

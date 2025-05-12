@@ -2,6 +2,7 @@ import numpy as np
 from detect import HumanDetector, CustomDetector, BehaviourDetector
 from typing import List, Tuple
 from common_model import TraceData
+from utils import save_dicts_to_json
 
 from config import settings
 class DetectorService:
@@ -16,7 +17,6 @@ class DetectorService:
             model_path=human_cfg.get("model_path", ""),
             pose_model_path=human_cfg.get("pose_model_path", "")
         )
-        
         self.behaviour = BehaviourDetector()
 
         # Custom detector (e.g., vehicle, object)
@@ -25,30 +25,37 @@ class DetectorService:
         #     model_path=custom_cfg.get("model_path", "")
         # )
 
-    def detect(self, frame: np.ndarray, fps: float, m_per_px: float) -> Tuple[np.ndarray, List[TraceData]]:
+    def detect(
+        self,
+        frame: np.ndarray,
+        fps: float,
+        m_per_px: float
+    ) -> Tuple[np.ndarray, List[TraceData]]:
         """
-        Runs all enabled detectors and returns a combined list of detection dicts.
+        Runs all enabled detectors and returns (frame, updated TraceData list).
         """
-        # Human detection
+        # 1) Run human detection to get a list of TraceData (with IDs)
         frame, human_data = self.human_detector.detect_humans(
-            frame, fps, m_per_px, zone_pts = self.zone_pts
+            frame, fps, m_per_px, zone_pts=self.zone_pts
         )
-        
-        people = [d for d in human_data if d.class_name == "person"]
 
-        if people:
-            for person in people:
-                human_data = self.behaviour.analyze_behaviour(
-                    human_data,
+        # 2) For each entry, if it's a person, analyze just that one
+        result: List[TraceData] = []
+        for entry in human_data:
+            if entry.class_name == "person":
+                updated = self.behaviour.analyze_behaviour(
+                    entry,
                     fps=fps,
                     zone_pts=self.zone_pts,
-                    v_min=settings.MIN_SPEED_TO_BE_LOITERING,        # e.g. 0.2 m/s
-                    m_per_px=m_per_px   # your scene calibration
+                    v_min=settings.MIN_SPEED_TO_BE_LOITERING,
+                    m_per_px=m_per_px
                 )
-        # Example: custom = self.custom_detector.detect_objects(frame)
-        # Combine lists if you have multiple detectors:
-        # return human_data + custom
+                result.append(updated)
+            else:
+                result.append(entry)
 
-        # Save traces for later analysis
-        self.human_detector.save_trace_json(human_data, path='human_traces.json')
-        return frame, human_data,
+        # 3) Save all to JSON once
+        dicts = [e.model_dump(by_alias=True) for e in result]
+        save_dicts_to_json(dicts, "human_data.json")
+
+        return frame, result
