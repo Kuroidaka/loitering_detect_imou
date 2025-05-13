@@ -3,7 +3,7 @@ import numpy as np
 from typing import List
 from utils import draw_dashed_polygon
 from common_model import TraceData
-
+from zone_selector import ZoneSelector
 class OverlayRenderer:
     """
     Draws zones, FPS, status, and trespass/loiter alerts onto frames.
@@ -17,7 +17,7 @@ class OverlayRenderer:
         fps: float,
         detection_on: bool,
         detections: List[TraceData],
-        zone_selector
+        zone_selector: ZoneSelector
     ) -> np.ndarray:
         # determine if any loiter alert exists
         zone_alert = any(det.is_loitering for det in detections)
@@ -26,7 +26,7 @@ class OverlayRenderer:
         self._draw_zone_overlay(frame, alert=zone_alert)
 
         # 2) detection boxes
-        self._draw_detection_boxes(frame, detections, alert=zone_alert)
+        self._draw_detection_boxes(frame, detections)
 
         # 3) trespass alerts
         self._draw_trespass_alerts(frame, detections, zone_selector)
@@ -78,20 +78,28 @@ class OverlayRenderer:
         for det in detections:
             x1, y1, x2, y2 = det.bbox
             
-            color = (0, 0, 255) if alert else (0, 128, 0)
-            cv2.rectangle(
-                frame,
-                (x1, y1),
-                (x2, y2),
-                color=color,
-                thickness=2
-            )
+            if det.is_loitering:
+                cv2.rectangle(
+                    frame,
+                    (x1, y1),
+                    (x2, y2),
+                    color=(0, 0, 255),
+                    thickness=2
+                )
+            else:
+                cv2.rectangle(
+                    frame,
+                    (x1, y1),
+                    (x2, y2),
+                    color=(0, 128, 0),
+                    thickness=2
+                )
 
     def _draw_trespass_alerts(
         self,
         frame: np.ndarray,
         detections: List[TraceData],
-        zone_selector
+        zone_selector: ZoneSelector
     ) -> None:
         """
         Overlay "TRESPASS!" text at centroid for detections inside the zone.

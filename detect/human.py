@@ -29,7 +29,8 @@ class HumanDetector:
 
         # Core detectors
         self.det_model  = YOLO(model_path)
-        
+        self.DETECT_CONF = 0.6
+
         self.pose_model = YOLO(pose_model_path) if enable_keypoints else None
         self.behaviour_detector = BehaviourDetector()
 
@@ -51,7 +52,7 @@ class HumanDetector:
         self.edge_annotator   = sv.EdgeAnnotator()  if enable_keypoints else None
         self.vertex_annotator = sv.VertexAnnotator()if enable_keypoints else None
     def detect_humans(
-        self, frame: np.ndarray, fps: float, m_per_px: float, zone_pts:list[tuple[int,int]]
+        self, frame: np.ndarray, fps: float, m_per_px: float
     ) -> Tuple[np.ndarray, List[TraceData]]:
         """
         Runs person detection → optional tracking → optional keypoints.
@@ -62,7 +63,7 @@ class HumanDetector:
             trace_data: List[TraceData] = []
 
             # 1. Raw YOLO detections
-            yolo_results = self.det_model(frame, classes=[0])[0]
+            yolo_results = self.det_model(frame, classes=[0], conf=self.DETECT_CONF)[0]
 
             # 2. Either track+annotate or draw raw boxes
             if self.enable_tracking:

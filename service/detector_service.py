@@ -3,6 +3,7 @@ from detect import HumanDetector, CustomDetector, BehaviourDetector
 from typing import List, Tuple
 from common_model import TraceData
 from utils import save_dicts_to_json
+from dataclasses import asdict
 
 from config import settings
 class DetectorService:
@@ -36,7 +37,7 @@ class DetectorService:
         """
         # 1) Run human detection to get a list of TraceData (with IDs)
         frame, human_data = self.human_detector.detect_humans(
-            frame, fps, m_per_px, zone_pts=self.zone_pts
+            frame, fps, m_per_px
         )
 
         # 2) For each entry, if it's a person, analyze just that one
@@ -54,8 +55,13 @@ class DetectorService:
             else:
                 result.append(entry)
 
-        # 3) Save all to JSON once
-        dicts = [e.model_dump(by_alias=True) for e in result]
-        save_dicts_to_json(dicts, "human_data.json")
+        dicts = [asdict(e) for e in result]
+        if dicts:
+            dicts_no_trace = []
+            for d in dicts:
+                d.pop('trace', None)
+                dicts_no_trace.append(d)
+            save_dicts_to_json(dicts, "human_data.json")
+
 
         return frame, result

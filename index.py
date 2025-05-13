@@ -14,16 +14,17 @@ from main import pause_for_frame_draw, FPSCounter
 def index(source: str):
     # 1) Start grabbing frames (RTSP or file)
     grabber = LocalFrameGrabber(source)
-    grabber.start()
 
-    # 2) Calibration (m/px)
-    calib_frame = pause_for_frame_draw(grabber)
-    calib = CalibrationTool(calib_frame)
+    # Step 1: Read the first frame
+    first_frame = grabber.get_frame()
+
+    # Step 2: Calibrate using the first frame (UI loop happens here)
+    calibrator = CalibrationTool(first_frame)
+    print("Meters per pixel:", calibrator.m_per_px)
 
     # 3) Zone selection
-    zone_frame = pause_for_frame_draw(grabber)
-    zone   = ZoneSelector(zone_frame)
-
+    zone   = ZoneSelector(first_frame)
+    grabber.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
     # 4) Detector service (you can pass model paths via settings or config)
     detector = DetectorService({
         "human": {
@@ -40,10 +41,12 @@ def index(source: str):
 
     fps_counter   = FPSCounter()
     use_detection = True
+    prev_time = time.time()
 
     # read nominal FPS *once*, and compute display delay from that
     nominal_fps = grabber.cap.get(cv2.CAP_PROP_FPS) or 30.0
-    frame_delay_ms = int(1000 / nominal_fps)
+    
+    
     try:
         # 6) Main loop
         while True:
@@ -52,13 +55,19 @@ def index(source: str):
                 time.sleep(0.005)
                 continue
             
+               # Compute instantaneous FPS
+            curr_time = time.time()
+            dt = curr_time - prev_time
+            fps = 1.0 / dt if dt > 0 else 0.0
+            prev_time = curr_time
+            
             # tick for diagnostics only
             actual_fps = fps_counter.tick()
             
             # run detection if enabled
             detections: List[TraceData] = []
             if use_detection:
-                frame, detections = detector.detect(frame, actual_fps, calib.m_per_px)
+                frame, detections = detector.detect(frame, actual_fps, calibrator.m_per_px)
 
             # render all overlays (zone, FPS, warnings, etc.)
             out = renderer.render(
@@ -68,7 +77,8 @@ def index(source: str):
                 detections=detections,
                 zone_selector=zone
             )
-
+            
+            frame_delay_ms = int(1000 / nominal_fps)
             cv2.imshow("Live Feed", out)
             key = cv2.waitKey(frame_delay_ms) & 0xFF
 
@@ -80,7 +90,7 @@ def index(source: str):
                 use_detection = not use_detection
     finally:
         # cleanup
-        grabber.stop()
+        grabber.release()
         cv2.destroyAllWindows()
 
 if __name__ == "__main__":

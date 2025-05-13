@@ -5,6 +5,7 @@ from typing import List, Dict, Tuple, Any
 from common_model import TraceData
 from datetime import datetime
 import time
+from dataclasses import replace
 
 from utils import save_dicts_to_json
 from .score_stableizer import ScoreStabilizer
@@ -15,15 +16,16 @@ class BehaviourDetector:
     compute dwell, pause, speed statistics, and spatial metrics within a defined zone.
     Supports day/night adaptive thresholding.
     """
+
     # Day/Night threshold presets
     THRESHOLDS = {
         'day': {
-            'dwell_time': 45.0,
-            'pause_duration': 15.0,
-            'movement_radius': 5.0,
-            'avg_speed': 0.7,
-            'path_variance': 1.2,
-            'score_weights': (0.35, 0.35, 0.15, 0.15),
+            'dwell_time': 180.0, # 
+            'pause_duration': 120.0, # s
+            'movement_radius': 2.0, # m
+            'avg_speed': 0.3,
+            # 'path_variance': 1.2,
+            'score_weights': (0.35, 0.35, 0.15, 0.15), # dwell_time, movement_radius, avg_speed, pause_duration
             'score_thresh': 0.50
         },
         'night': {
@@ -31,7 +33,7 @@ class BehaviourDetector:
             'pause_duration': 8.0,
             'movement_radius': 3.0,
             'avg_speed': 0.5,
-            'path_variance': 0.8,
+            # 'path_variance': 0.8,
             'score_weights': (0.40, 0.40, 0.10, 0.10),
             'score_thresh': 0.45
         }
@@ -56,7 +58,7 @@ class BehaviourDetector:
         movement_radius: float,
         avg_speed: float,
         pause_duration: float,
-        path_variance: float
+        # path_variance: float
     ) -> bool:
         """
         Rule-based loitering with day/night thresholds: must meet at least two criteria.
@@ -68,7 +70,7 @@ class BehaviourDetector:
             pause_duration >= t['pause_duration'],
             movement_radius <= t['movement_radius'],
             avg_speed <= t['avg_speed'],
-            path_variance <= t['path_variance']
+            # path_variance <= t['path_variance']
         ]
         return sum(conds) >= 2
 
@@ -153,40 +155,80 @@ class BehaviourDetector:
         positive_speeds = [s for s in speeds if s > 0]
         min_speed = min(positive_speeds) if positive_speeds else 0.0
         return avg_speed, min_speed
-
-    def compute_dwell_time(
-        self,
-        history: List[Tuple[int, int]],
-        fps: float,
-        zone_pts: List[Tuple[int, int]]
-    ) -> float:
-        """
-        Compute total time (seconds) the object spent within the polygon defined by zone_pts.
-        """
+ 
+    def compute_dwell_time(self, history, fps, zone_pts, max_gap=2):
         if not history or fps <= 0:
             return 0.0
+
         contour = np.array(zone_pts, dtype=np.int32)
-        inside = [i for i, pt in enumerate(history)
-                  if cv2.pointPolygonTest(contour, pt, False) >= 0]
-        if not inside:
-            return 0.0
-        return (inside[-1] - inside[0]) / fps
+        # Boolean list of “inside zone” per frame
+        flags = np.array([cv2.pointPolygonTest(contour, pt, False) >= 0
+                        for pt in history], dtype=int)
+
+        total = 0
+        run = 0
+        gap = 0
+
+        for f in flags:
+            if f:
+                if gap > 0:
+                    run += gap  # bridge short gaps
+                    gap = 0
+                run += 1
+            else:
+                if run > 0:
+                    gap += 1
+                    if gap > max_gap:
+                        total += run
+                        run = 0
+                        gap = 0
+
+        total += run
+        return total / float(fps)
 
     def compute_pause_duration(
         self,
         history: List[Tuple[int, int]],
         fps: float,
         v_min: float,
-        m_per_px: float
+        m_per_px: float,
+        zone_pts: List[Tuple[int, int]]
     ) -> float:
         """
-        Compute total paused time (seconds) where instantaneous speed < v_min.
+        Compute total paused time (seconds) where instantaneous speed < v_min
+        AND the object is inside the polygon defined by zone_pts.
         """
+        # 1) Guard clauses
+        if not history or fps <= 0:
+            return 0.0
+
+        # 2) Build the polygon contour once
+        contour = np.array(zone_pts, dtype=np.int32)
+
+        # 3) Precompute inside/outside for each history point
+        inside_flags = [
+            cv2.pointPolygonTest(contour, pt, False) >= 0
+            for pt in history
+        ]
+        # If it never enters the zone, no paused time to count
+        if not any(inside_flags):
+            return 0.0
+
+        # 4) Compute speeds (len = len(history)-1)
         speeds = self.compute_speed_list(history, fps, m_per_px)
         if not speeds:
             return 0.0
-        paused_frames = sum(1 for s in speeds if s < v_min)
-        return paused_frames / fps
+
+        # 5) Count only those low-speed segments fully inside the zone
+        paused_frames = 0
+        for i, s in enumerate(speeds):
+            # segment from history[i] -> history[i+1]
+            if (s < v_min) and inside_flags[i] and inside_flags[i+1]:
+                paused_frames += 1
+
+        # 6) Convert frame count to seconds
+        return paused_frames / float(fps)
+
 
     def compute_movement_radius(
         self,
@@ -209,23 +251,23 @@ class BehaviourDetector:
                     max_dist_px = d
         return max_dist_px * m_per_px
 
-    def compute_path_variance(
-        self,
-        history: List[Tuple[int, int]],
-        m_per_px: float
-    ) -> float:
-        """
-        Compute the variance of the person's path positions in m^2:
-        sigma^2 = (1/N) sum ||x_i - mean||^2
-        """
-        if not history:
-            return 0.0
-        # convert to meters and compute mean
-        pts_m = [(x*m_per_px, y*m_per_px) for x,y in history]
-        mean_x = sum(p[0] for p in pts_m) / len(pts_m)
-        mean_y = sum(p[1] for p in pts_m) / len(pts_m)
-        var_sum = sum((p[0]-mean_x)**2 + (p[1]-mean_y)**2 for p in pts_m)
-        return var_sum / len(pts_m)
+    # def compute_path_variance(
+    #     self,
+    #     history: List[Tuple[int, int]],
+    #     m_per_px: float
+    # ) -> float:
+    #     """
+    #     Compute the variance of the person's path positions in m^2:
+    #     sigma^2 = (1/N) sum ||x_i - mean||^2
+    #     """
+    #     if not history:
+    #         return 0.0
+    #     # convert to meters and compute mean
+    #     pts_m = [(x*m_per_px, y*m_per_px) for x,y in history]
+    #     mean_x = sum(p[0] for p in pts_m) / len(pts_m)
+    #     mean_y = sum(p[1] for p in pts_m) / len(pts_m)
+    #     var_sum = sum((p[0]-mean_x)**2 + (p[1]-mean_y)**2 for p in pts_m)
+    #     return var_sum / len(pts_m)
 
     
     def analyze_behaviour(
@@ -241,10 +283,10 @@ class BehaviourDetector:
         """
         history = entry.trace
         dwell     = self.compute_dwell_time(history, fps, zone_pts)
-        pause     = self.compute_pause_duration(history, fps, v_min, m_per_px)
+        pause     = self.compute_pause_duration(history, fps, v_min, m_per_px, zone_pts)
         avg_spd, min_spd = self.compute_speeds(history, fps, m_per_px)
         radius    = self.compute_movement_radius(history, m_per_px)
-        variance  = self.compute_path_variance(history, m_per_px)
+        # variance  = self.compute_path_variance(history, m_per_px)
         raw_loiter_score =self.compute_raw_loiter_score(
             dwell_time=dwell,
             movement_radius=radius,
@@ -262,20 +304,18 @@ class BehaviourDetector:
             movement_radius=radius,
             avg_speed=avg_spd,
             pause_duration=pause,
-            path_variance=variance                                       
+            # path_variance=variance                                       
         )
         # first update numeric metrics
-        upd = entry.model_copy(update={
-            "raw_loiter_score": raw_loiter_score,
-            "is_loitering": is_loitering,
-            'rule_loiter': rule_flag,
-            'dwell_time': dwell,
-            'pause_duration': pause,
-            'avg_speed': avg_spd,
-            'min_speed': min_spd,
-            'movement_radius': radius,
-            'path_variance': variance
-        })
-
-
-        return upd
+        return replace(
+            entry,
+            dwell_time=dwell,
+            pause_duration=pause,
+            avg_speed=avg_spd,
+            min_speed=min_spd,
+            movement_radius=radius,
+            # path_variance=variance,
+            raw_loiter_score=raw_loiter_score,
+            rule_loiter=rule_flag,
+            is_loitering=is_loitering
+        )

@@ -75,6 +75,7 @@ def main():
     # 2) Calibration (m/px)
     calib_frame = wait_for_frame(grabber)
     calib = CalibrationTool(calib_frame)
+    m_per_px = calib.m_per_px
 
     # 3) Zone selection
     zone_frame = wait_for_frame(grabber)
@@ -109,7 +110,7 @@ def main():
         # run detection if enabled
         detections:List[TraceData] = []
         if use_detection:
-            frame, detections = detector.detect(frame, fps, calib.m_per_px)
+            frame, detections = detector.detect(frame, fps, m_per_px)
 
         # render all overlays (zone, FPS, trespass warnings, etc.)
         out = renderer.render(
