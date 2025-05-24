@@ -61,7 +61,7 @@ class LoiteringDetectorApp:
             thread_type=ThreadType.GROUP,
             width=2560,
             height=2560,
-            message=Message(text="Tên này đang lãng vãng trước camera nhà bạn!!!"),
+            message=Message(text="Người này đang lãng vãng trước camera nhà!!!"),
         )
         
     def initialize(self) -> None:

@@ -23,7 +23,7 @@ class BehaviourDetector:
         'day': {
             'dwell_time':    180.0,   # seconds
             'pause_duration':120.0,   # seconds
-            'curl_count':       3,    # minimum “curls” to count
+            'turns':       3,    # minimum “curls” to count
             'avg_speed':      0.5,    # m/s
             'score_weights': (0.35, 0.35, 0.15, 0.15),  # (dwell, curl, speed, pause)
             'score_thresh':   0.50
@@ -31,7 +31,7 @@ class BehaviourDetector:
         'night': {
             'dwell_time':    20.0, 
             'pause_duration': 8.0, 
-            'curl_count':       3, 
+            'turns':       3, 
             'avg_speed':      0.2,
             'score_weights': (0.40, 0.40, 0.10, 0.10), # (dwell, curl, speed, pause)
             'score_thresh':   0.45
@@ -77,7 +77,7 @@ class BehaviourDetector:
     def compute_raw_loiter_score(
         self,
         dwell_time: float,
-        curl_count: int,
+        turns: int,
         avg_speed: float,
         pause_duration: float
     ) -> float:
@@ -87,11 +87,11 @@ class BehaviourDetector:
         mode = self._get_time_mode()
         cfg = self.THRESHOLDS[mode]
         wT, wC, wV, wP = cfg['score_weights']
-        Tmax, Cmax = cfg['dwell_time'], cfg['curl_count']
+        Tmax, Cmax = cfg['dwell_time'], cfg['turns']
         Vmin, Pmax = cfg['avg_speed'], cfg['pause_duration']
 
         t_norm = min(dwell_time / Tmax, 1.0)
-        c_norm = min(curl_count  / Cmax, 1.0)
+        c_norm = min(turns  / Cmax, 1.0)
         v_norm = max(1.0 - avg_speed / Vmin, 0.0)
         p_norm = min(pause_duration / Pmax, 1.0)
 
@@ -301,74 +301,154 @@ class BehaviourDetector:
                     state = "up"
 
         # Count each (min → max → min) or (max → min → max) as 1 curl
-        curl_count = 0
+        turns = 0
         for i in range(1, len(peaks) - 1, 2):
             a, b, c = peaks[i - 1], peaks[i], peaks[i + 1]
             if a[0] != b[0] and b[0] != c[0]:
                 dy1 = abs(ys[a[1]] - ys[b[1]])
                 dy2 = abs(ys[b[1]] - ys[c[1]])
                 if dy1 >= min_peak_distance and dy2 >= min_peak_distance:
-                    curl_count += 1
+                    turns += 1
 
-        return curl_count
+        return turns
 
 
 
+    # def count_non_forward_events(
+    #     self,
+    #     trace: List[Tuple[int,int]],
+    #     angle_threshold: float = 30.0,
+    #     recovery_length: int = 15
+    # ) -> int:
+    #     """
+    #     Count how many times the tracked point 'turns' by more than angle_threshold
+    #     degrees, requiring at least `recovery_length` straight segments
+    #     before counting a new event.
+    #     """
+    #     # 1. Build segment vectors
+    #     vecs = [
+    #         (x2-x1, y2-y1)
+    #         for (x1,y1),(x2,y2) in zip(trace, trace[1:])
+    #         if (x2-x1, y2-y1) != (0,0)
+    #     ]
+    #     if len(vecs) < 2:
+    #         return 0
+
+    #     # 2. Compute angles between consecutive vectors
+    #     angles = []
+    #     for (vx1,vy1), (vx2,vy2) in zip(vecs, vecs[1:]):
+    #         dot = vx1*vx2 + vy1*vy2
+    #         mag1 = math.hypot(vx1, vy1)
+    #         mag2 = math.hypot(vx2, vy2)
+    #         # clamp for numerical stability
+    #         cosθ = max(-1, min(1, dot/(mag1*mag2)))
+    #         θ = math.degrees(math.acos(cosθ))
+    #         angles.append(θ)
+
+    #     # 3. Flag turn vs straight segments
+    #     is_turn = [θ > angle_threshold for θ in angles]
+
+    #     # 4. Walk through and count with recovery
+    #     events = 0
+    #     i = 0
+    #     n = len(is_turn)
+    #     while i < n:
+    #         # look for a rise edge: straight→turn
+    #         if is_turn[i] and (i == 0 or not is_turn[i-1]):
+    #             events += 1
+    #             # skip this turn region
+    #             while i < n and is_turn[i]:
+    #                 i += 1
+    #             # now require `recovery_length` straights before next possible event
+    #             straight_count = 0
+    #             while i < n and straight_count < recovery_length:
+    #                 if not is_turn[i]:
+    #                     straight_count += 1
+    #                 else:
+    #                     # if another turn pops up too soon, we consider it the same event
+    #                     straight_count = 0
+    #                 i += 1
+    #             # now ready to look for a new event
+    #         else:
+    #             i += 1
+
+    #     return events
+    
+    
     def count_non_forward_events(
         self,
-        trace: List[Tuple[int,int]],
+        trace: List[Tuple[int, int]],
         angle_threshold: float = 30.0,
-        recovery_length: int = 15
+        deviation_threshold: float = 5.0,
+        length_threshold: float = 2.0,
+        recovery_length: int = 5
     ) -> int:
         """
-        Count how many times the tracked point 'turns' by more than angle_threshold
-        degrees, requiring at least `recovery_length` straight segments
-        before counting a new event.
+        Count the number of non-forward (turn or curl) events in a movement trace.
+        
+        Parameters:
+        - trace: List of (x, y) positions.
+        - angle_threshold: Max angle (degrees) between steps to still be considered straight.
+        - deviation_threshold: Max perpendicular deviation (pixels) from the previous direction to be straight.
+        - length_threshold: Minimum segment length to include (filters out noise).
+        - recovery_length: Number of straight segments required before counting a new event.
+        
+        Returns:
+        - Number of non-forward events detected.
         """
-        # 1. Build segment vectors
-        vecs = [
-            (x2-x1, y2-y1)
-            for (x1,y1),(x2,y2) in zip(trace, trace[1:])
-            if (x2-x1, y2-y1) != (0,0)
-        ]
+        # 1. Build valid vectors and their start points
+        vecs: List[Tuple[float, float]] = []
+        pts: List[Tuple[float, float]] = []
+        for (x1, y1), (x2, y2) in zip(trace, trace[1:]):
+            dx, dy = x2 - x1, y2 - y1
+            dist = math.hypot(dx, dy)
+            if dist >= length_threshold:
+                vecs.append((dx, dy))
+                pts.append((x1, y1))
         if len(vecs) < 2:
             return 0
 
-        # 2. Compute angles between consecutive vectors
-        angles = []
-        for (vx1,vy1), (vx2,vy2) in zip(vecs, vecs[1:]):
-            dot = vx1*vx2 + vy1*vy2
+        # 2. Determine non-forward flags (angle OR deviation)
+        is_non_forward: List[bool] = []
+        for i in range(1, len(vecs)):
+            vx0, vy0 = vecs[i - 1]
+            vx1, vy1 = vecs[i]
+
+            # (A) Angle calculation
+            dot = vx0 * vx1 + vy0 * vy1
+            mag0 = math.hypot(vx0, vy0)
             mag1 = math.hypot(vx1, vy1)
-            mag2 = math.hypot(vx2, vy2)
-            # clamp for numerical stability
-            cosθ = max(-1, min(1, dot/(mag1*mag2)))
-            θ = math.degrees(math.acos(cosθ))
-            angles.append(θ)
+            cos_theta = max(-1.0, min(1.0, dot / (mag0 * mag1)))
+            angle = math.degrees(math.acos(cos_theta))
 
-        # 3. Flag turn vs straight segments
-        is_turn = [θ > angle_threshold for θ in angles]
+            # (B) Deviation calculation (cross-product method)
+            cross = abs(vx1 * vy0 - vy1 * vx0)
+            deviation = cross / mag0 if mag0 != 0 else float('inf')
 
-        # 4. Walk through and count with recovery
+            # Non-forward if either condition is violated
+            is_non_forward.append(
+                (angle > angle_threshold) or (deviation > deviation_threshold)
+            )
+
+        # 3. Count events with recovery logic
         events = 0
         i = 0
-        n = len(is_turn)
+        n = len(is_non_forward)
         while i < n:
-            # look for a rise edge: straight→turn
-            if is_turn[i] and (i == 0 or not is_turn[i-1]):
+            # Rising edge: first non-forward after forward
+            if is_non_forward[i] and (i == 0 or not is_non_forward[i - 1]):
                 events += 1
-                # skip this turn region
-                while i < n and is_turn[i]:
+                # Skip through the non-forward region
+                while i < n and is_non_forward[i]:
                     i += 1
-                # now require `recovery_length` straights before next possible event
-                straight_count = 0
-                while i < n and straight_count < recovery_length:
-                    if not is_turn[i]:
-                        straight_count += 1
+                # Require recovery_length consecutive straight segments
+                straight = 0
+                while i < n and straight < recovery_length:
+                    if not is_non_forward[i]:
+                        straight += 1
                     else:
-                        # if another turn pops up too soon, we consider it the same event
-                        straight_count = 0
+                        straight = 0
                     i += 1
-                # now ready to look for a new event
             else:
                 i += 1
 
@@ -463,7 +543,7 @@ class BehaviourDetector:
                 pause_duration=0.0,
                 avg_speed=0.0,
                 min_speed=0.0,
-                curl_count=0,
+                turns=0,
                 raw_loiter_score=0.0,
                 rule_loiter=False,
                 is_loitering=False
@@ -475,11 +555,11 @@ class BehaviourDetector:
         
         pause      = self.compute_pause_duration(history, fps, v_min, m_per_px, zone_pts)
         avg_spd, min_spd = self.compute_speeds(history, fps, m_per_px)
-        curl_count = self.count_non_forward_events(history)
+        turns = self.count_non_forward_events(history)
 
         # 4) compute score & flags
-        raw_score  = self.compute_raw_loiter_score(dwell, curl_count, avg_spd, pause)
-        # rule_flag  = self.is_loitering_by_rule(dwell, curl_count, avg_spd, pause)
+        raw_score  = self.compute_raw_loiter_score(dwell, turns, avg_spd, pause)
+        # rule_flag  = self.is_loitering_by_rule(dwell, turns, avg_spd, pause)
         final_flag = self.check_loitering(entry.id, raw_score)
 
         # 5) single replace with all updated fields
@@ -488,7 +568,7 @@ class BehaviourDetector:
             pause_duration   = pause,
             avg_speed        = avg_spd,
             min_speed        = min_spd,
-            curl_count       = curl_count,
+            turns       = turns,
             raw_loiter_score = raw_score,
             # rule_loiter      = rule_flag,
             is_loitering     = final_flag,

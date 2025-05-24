@@ -1,11 +1,15 @@
-from flask import Flask
+from zlapi import ZaloAPI
+from zlapi.models import ThreadType, Message
+from config import settings
 
-app = Flask(__name__)
+zalo_client = ZaloAPI(phone=settings.ZALO_NUMBER, password=settings.ZALO_PASSWROD, imei=settings.ZALO_IMEI, cookies=settings.ZALO_COOKIES)
 
-@app.route("/")
-def hello():
-    return "Hello, world!"
 
-if __name__ == "__main__":
-    # listen on all interfaces, port 5000
-    app.run(host="0.0.0.0", port=8000)
+groups = zalo_client.fetchAllGroups()
+
+# print(groups.gridVerMap)
+
+# group_ids = [group.keys() for group in groups.gridVerMap]
+keys = list(vars(groups.gridVerMap).keys())
+
+[print(zalo_client.fetchGroupInfo(key)) for key in keys]

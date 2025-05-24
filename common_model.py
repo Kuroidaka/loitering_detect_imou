@@ -15,6 +15,6 @@ class TraceData:
     dwell_time: Optional[float] = None
     pause_duration: Optional[float] = None
     movement_radius: Optional[float] = None
-    curl_count: Optional[int] = None
+    turns: Optional[int] = None
     path_variance: Optional[float] = None
     trace: List[Tuple[int, int]] = field(default_factory=list)
