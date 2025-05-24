@@ -59,7 +59,7 @@ class DetectorService:
         if dicts:
             dicts_no_trace = []
             for d in dicts:
-                d.pop('trace', None)
+                # d.pop('trace', None)
                 dicts_no_trace.append(d)
             save_dicts_to_json(dicts, "human_data.json")
 

@@ -29,7 +29,7 @@ class HumanDetector:
 
         # Core detectors
         self.det_model  = YOLO(model_path)
-        self.DETECT_CONF = 0.6
+        self.DETECT_CONF = 0.5
 
         self.pose_model = YOLO(pose_model_path) if enable_keypoints else None
         self.behaviour_detector = BehaviourDetector()
@@ -39,12 +39,12 @@ class HumanDetector:
         self.tracker          = sv.ByteTrack()     if enable_tracking else None
         self.box_annotator    = sv.BoxAnnotator()  if enable_tracking else None
         self.label_annotator  = sv.LabelAnnotator(
-            text_scale = 3,
-            text_thickness = 2,    
+            text_scale = 1,
+            text_thickness = 1,    
         )if enable_tracking else None
         self.trace_annotator  = sv.TraceAnnotator(
-            trace_length = 1000,
-            thickness = 10,
+            trace_length = 300,
+            thickness = 5,
             )if enable_tracking else None
         self.track_histories  = {}                 # tid → list of centroids
 
@@ -66,25 +66,26 @@ class HumanDetector:
             yolo_results = self.det_model(frame, classes=[0], conf=self.DETECT_CONF)[0]
 
             # 2. Either track+annotate or draw raw boxes
-            if self.enable_tracking:
-                dets_smoothed = self._get_smoothed_detections(yolo_results)
-                tracked       = self._update_tracking(dets_smoothed)
-                
-                
-                trace_data    = self._build_trace_data(tracked, yolo_results)
+            if yolo_results:
+                if self.enable_tracking:
+                    dets_smoothed = self._get_smoothed_detections(yolo_results)
+                    tracked       = self._update_tracking(dets_smoothed)
+                    
+                    
+                    trace_data    = self._build_trace_data(tracked, yolo_results)
 
 
-                # detect behaviours
-                # trace_data = self.behaviour_detector.annotate_behaviour(trace_data)
+                    # detect behaviours
+                    # trace_data = self.behaviour_detector.annotate_behaviour(trace_data)
 
-                # annotated = self.behaviour_detector.draw_loiter_flags(annotated, trace_data, tracked.xyxy)
-                
-                annotated     = self._annotate_tracking(
-                    annotated, tracked, yolo_results, trace_data, fps, m_per_px
-                )
+                    # annotated = self.behaviour_detector.draw_loiter_flags(annotated, trace_data, tracked.xyxy)
+                    
+                    annotated     = self._annotate_tracking(
+                        annotated, tracked, yolo_results, trace_data, fps, m_per_px
+                    )
 
-            else:
-                annotated = self._draw_raw_boxes(annotated, yolo_results)
+                else:
+                    annotated = self._draw_raw_boxes(annotated, yolo_results)
 
             # 3. Optionally overlay pose keypoints
             if self.enable_keypoints:

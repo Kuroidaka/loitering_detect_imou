@@ -10,87 +10,101 @@ from service.detector_service import DetectorService
 from overlay_renderer import OverlayRenderer
 from common_model import TraceData
 from main import pause_for_frame_draw, FPSCounter
-
+from utils import save_video
+from file_reader_thread import ThreadedFileReader
 def index(source: str):
-    # 1) Start grabbing frames (RTSP or file)
-    grabber = LocalFrameGrabber(source)
+    grabber = ThreadedFileReader(src=source, queue_size=5).start()
 
-    # Step 1: Read the first frame
-    first_frame = grabber.get_frame()
+    # wait for first frame
+    first = None
+    while first is None:
+        first = grabber.get_frame()
+        time.sleep(0.01)
 
-    # Step 2: Calibrate using the first frame (UI loop happens here)
-    calibrator = CalibrationTool(first_frame)
+    # calibration
+    calibrator = CalibrationTool(first)
     print("Meters per pixel:", calibrator.m_per_px)
 
-    # 3) Zone selection
-    zone   = ZoneSelector(first_frame)
-    grabber.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-    # 4) Detector service (you can pass model paths via settings or config)
+    # zone selection
+    zone = ZoneSelector(first)
+
+    # restart video from beginning
+    grabber.reset()
+
+    # wait again for first frame post-reset
+    first = None
+    while first is None:
+        first = grabber.get_frame()
+        time.sleep(0.01)
+
+    # now create detector, renderer, etc., and proceed exactly as before...
     detector = DetectorService({
-        "human": {
-            "model_path": "./model/yolov8n.pt",
-            "pose_model_path": "./model/yolov8m-pose.pt"
-        },
-        "custom": {
-            "model_path": "./model/custom.pt"
-        }
-    }, zone_pts=zone.pts)
-
-    # 5) Renderer for overlays
+                        "human":  {"model_path": "./model/yolov8n.pt",
+                                   "pose_model_path": "./model/yolov8m-pose.pt"},
+                        "custom": {"model_path": "./model/custom.pt"}
+                    }, zone_pts=zone.pts)
     renderer = OverlayRenderer(zone.pts)
-
-    fps_counter   = FPSCounter()
+    fps_counter = FPSCounter()
     use_detection = True
     prev_time = time.time()
 
-    # read nominal FPS *once*, and compute display delay from that
+  # 6) VideoWriter setup
     nominal_fps = grabber.cap.get(cv2.CAP_PROP_FPS) or 30.0
-    
-    
+    width  = int(grabber.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(grabber.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    out    = cv2.VideoWriter("./assets/output/output_video_1.mp4",
+                              fourcc, nominal_fps, (width, height))
+
+    # Precompute frame interval
+    frame_interval = 1.0 / nominal_fps
+
     try:
-        # 6) Main loop
         while True:
+            loop_start = time.time()
+
+            # 1) Grab the latest frame (or skip if none)
             frame = grabber.get_frame()
             if frame is None:
-                time.sleep(0.005)
+                time.sleep(0.001)
                 continue
-            
-               # Compute instantaneous FPS
-            curr_time = time.time()
-            dt = curr_time - prev_time
-            fps = 1.0 / dt if dt > 0 else 0.0
-            prev_time = curr_time
-            
-            # tick for diagnostics only
+
+            # 2) Compute actual FPS for diagnostics
             actual_fps = fps_counter.tick()
-            
-            # run detection if enabled
-            detections: List[TraceData] = []
+
+            # 3) Detection & tracking
+            detections = []
             if use_detection:
                 frame, detections = detector.detect(frame, actual_fps, calibrator.m_per_px)
 
-            # render all overlays (zone, FPS, warnings, etc.)
-            out = renderer.render(
+            # 4) Render overlays
+            rendered = renderer.render(
                 frame,
                 fps=actual_fps,
                 detection_on=use_detection,
                 detections=detections,
                 zone_selector=zone
             )
-            
-            frame_delay_ms = int(1000 / nominal_fps)
-            cv2.imshow("Live Feed", out)
-            key = cv2.waitKey(frame_delay_ms) & 0xFF
 
-            if key == ord('q'):
-                break
-            elif key == ord(' '):
-                pause_for_frame_draw(grabber)
-            elif key == ord('d'):
-                use_detection = not use_detection
+            # 5) Write to file and display
+            out.write(rendered)
+            cv2.imshow("Live Feed", rendered)
+
+            # 6) Handle key controls
+            key = cv2.waitKey(1) & 0xFF
+            if   key == ord('q'): break
+            elif key == ord(' '): pause_for_frame_draw(grabber)
+            elif key == ord('d'): use_detection = not use_detection
+
+            # 7) Sleep the remainder of the frame interval
+            elapsed = time.time() - loop_start
+            to_sleep = frame_interval - elapsed
+            if to_sleep > 0:
+                time.sleep(to_sleep)
+
     finally:
-        # cleanup
         grabber.release()
+        out.release()
         cv2.destroyAllWindows()
 
 if __name__ == "__main__":
@@ -100,4 +114,4 @@ if __name__ == "__main__":
     #     help="RTSP URL (e.g. rtsp://…) or path to local video file"
     # )
     # args = p.parse_args()
-    index("./assets/video_test.MOV")
+    index("./assets/in_yard.mov")

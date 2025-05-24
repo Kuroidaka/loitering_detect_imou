@@ -6,6 +6,7 @@ from common_model import TraceData
 from datetime import datetime
 import time
 from dataclasses import replace
+from math import acos
 
 from utils import save_dicts_to_json
 from .score_stableizer import ScoreStabilizer
@@ -20,23 +21,21 @@ class BehaviourDetector:
     # Day/Night threshold presets
     THRESHOLDS = {
         'day': {
-            'dwell_time': 180.0, # 
-            'pause_duration': 120.0, # s
-            'movement_radius': 2.0, # m
-            'avg_speed': 0.3,
-            # 'path_variance': 1.2,
-            'score_weights': (0.35, 0.35, 0.15, 0.15), # dwell_time, movement_radius, avg_speed, pause_duration
-            'score_thresh': 0.50
+            'dwell_time':    180.0,   # seconds
+            'pause_duration':120.0,   # seconds
+            'curl_count':       3,    # minimum “curls” to count
+            'avg_speed':      0.5,    # m/s
+            'score_weights': (0.35, 0.35, 0.15, 0.15),  # (dwell, curl, speed, pause)
+            'score_thresh':   0.50
         },
         'night': {
-            'dwell_time': 20.0,
-            'pause_duration': 8.0,
-            'movement_radius': 3.0,
-            'avg_speed': 0.5,
-            # 'path_variance': 0.8,
-            'score_weights': (0.40, 0.40, 0.10, 0.10),
-            'score_thresh': 0.45
-        }
+            'dwell_time':    20.0, 
+            'pause_duration': 8.0, 
+            'curl_count':       3, 
+            'avg_speed':      0.2,
+            'score_weights': (0.40, 0.40, 0.10, 0.10), # (dwell, curl, speed, pause)
+            'score_thresh':   0.45
+        }   
     }
 
     def __init__(
@@ -49,8 +48,9 @@ class BehaviourDetector:
         Determine 'day' or 'night' based on current hour.
         Night is before 6am or after 8pm.
         """
-        h = datetime.now().hour
-        return 'night' if (h < 6 or h >= 20) else 'day'
+        return "night"
+        # h = datetime.now().hour
+        # return 'night' if (h < 6 or h >= 20) else 'day'
 
     def is_loitering_by_rule(
         self,
@@ -77,27 +77,25 @@ class BehaviourDetector:
     def compute_raw_loiter_score(
         self,
         dwell_time: float,
-        movement_radius: float,
+        curl_count: int,
         avg_speed: float,
         pause_duration: float
     ) -> float:
         """
-        Score-based loitering metric with day/night weights.
+        Score-based: normalize each metric, weight by importance, sum to S.
         """
         mode = self._get_time_mode()
         cfg = self.THRESHOLDS[mode]
-        wT, wR, wV, wP = cfg['score_weights']
-        Tmax = cfg['dwell_time']
-        Rmax = cfg['movement_radius']
-        Vmin = cfg['avg_speed']
-        Pmax = cfg['pause_duration']
-        # normalize
+        wT, wC, wV, wP = cfg['score_weights']
+        Tmax, Cmax = cfg['dwell_time'], cfg['curl_count']
+        Vmin, Pmax = cfg['avg_speed'], cfg['pause_duration']
+
         t_norm = min(dwell_time / Tmax, 1.0)
-        r_norm = max(1.0 - movement_radius / Rmax, 0.0)
+        c_norm = min(curl_count  / Cmax, 1.0)
         v_norm = max(1.0 - avg_speed / Vmin, 0.0)
         p_norm = min(pause_duration / Pmax, 1.0)
-        return wT*t_norm + wR*r_norm + wV*v_norm + wP*p_norm
 
+        return wT*t_norm + wC*c_norm + wV*v_norm + wP*p_norm
     def check_loitering(
         self,
         id: int,
@@ -269,7 +267,179 @@ class BehaviourDetector:
     #     var_sum = sum((p[0]-mean_x)**2 + (p[1]-mean_y)**2 for p in pts_m)
     #     return var_sum / len(pts_m)
 
+    def compute_vertical_curl_count(
+        self,
+        history: List[Tuple[int, int]],
+        min_peak_distance: int = 10,
+        min_peak_separation: int = 5
+    ) -> int:
+        """
+        Count vertical curls based on peak detection in the y-axis movement.
+
+        - min_peak_distance: minimum change in Y to consider a peak (to reduce noise)
+        - min_peak_separation: minimum number of frames between peaks (to avoid false positives)
+        """
+        if len(history) < 3:
+            return 0
+
+        ys = [y for _, y in history]
+        peaks = []
+        state = None  # None, "up", or "down"
+        last_peak_idx = -min_peak_separation
+
+        for i in range(1, len(ys) - 1):
+            prev, curr, next = ys[i - 1], ys[i], ys[i + 1]
+            if curr < prev and curr < next:  # local minimum (arm down)
+                if state != "down" and (i - last_peak_idx) >= min_peak_separation:
+                    peaks.append(("min", i))
+                    last_peak_idx = i
+                    state = "down"
+            elif curr > prev and curr > next:  # local maximum (arm up)
+                if state != "up" and (i - last_peak_idx) >= min_peak_separation:
+                    peaks.append(("max", i))
+                    last_peak_idx = i
+                    state = "up"
+
+        # Count each (min → max → min) or (max → min → max) as 1 curl
+        curl_count = 0
+        for i in range(1, len(peaks) - 1, 2):
+            a, b, c = peaks[i - 1], peaks[i], peaks[i + 1]
+            if a[0] != b[0] and b[0] != c[0]:
+                dy1 = abs(ys[a[1]] - ys[b[1]])
+                dy2 = abs(ys[b[1]] - ys[c[1]])
+                if dy1 >= min_peak_distance and dy2 >= min_peak_distance:
+                    curl_count += 1
+
+        return curl_count
+
+
+
+    def count_non_forward_events(
+        self,
+        trace: List[Tuple[int,int]],
+        angle_threshold: float = 30.0,
+        recovery_length: int = 15
+    ) -> int:
+        """
+        Count how many times the tracked point 'turns' by more than angle_threshold
+        degrees, requiring at least `recovery_length` straight segments
+        before counting a new event.
+        """
+        # 1. Build segment vectors
+        vecs = [
+            (x2-x1, y2-y1)
+            for (x1,y1),(x2,y2) in zip(trace, trace[1:])
+            if (x2-x1, y2-y1) != (0,0)
+        ]
+        if len(vecs) < 2:
+            return 0
+
+        # 2. Compute angles between consecutive vectors
+        angles = []
+        for (vx1,vy1), (vx2,vy2) in zip(vecs, vecs[1:]):
+            dot = vx1*vx2 + vy1*vy2
+            mag1 = math.hypot(vx1, vy1)
+            mag2 = math.hypot(vx2, vy2)
+            # clamp for numerical stability
+            cosθ = max(-1, min(1, dot/(mag1*mag2)))
+            θ = math.degrees(math.acos(cosθ))
+            angles.append(θ)
+
+        # 3. Flag turn vs straight segments
+        is_turn = [θ > angle_threshold for θ in angles]
+
+        # 4. Walk through and count with recovery
+        events = 0
+        i = 0
+        n = len(is_turn)
+        while i < n:
+            # look for a rise edge: straight→turn
+            if is_turn[i] and (i == 0 or not is_turn[i-1]):
+                events += 1
+                # skip this turn region
+                while i < n and is_turn[i]:
+                    i += 1
+                # now require `recovery_length` straights before next possible event
+                straight_count = 0
+                while i < n and straight_count < recovery_length:
+                    if not is_turn[i]:
+                        straight_count += 1
+                    else:
+                        # if another turn pops up too soon, we consider it the same event
+                        straight_count = 0
+                    i += 1
+                # now ready to look for a new event
+            else:
+                i += 1
+
+        return events
     
+    def compute_curl_count(
+        self,
+        history: List[Tuple[int, int]],
+        min_turn_frames: int = 3
+    ) -> int:
+        """
+        Count how many times the tracked path 'curls' (turns one way then back).
+        - history: list of (x,y) points
+        - min_turn_frames: minimum consecutive frames to treat as a valid turn segment
+        """
+        
+        n = len(history)
+        if n < 3:
+            return 0
+
+        # 1) Compute signed 'turn' for each triplet
+        signs = []
+        for i in range(n - 2):
+            (x0, y0), (x1, y1), (x2, y2) = history[i], history[i+1], history[i+2]
+            cross = (x1-x0)*(y2-y1) - (y1-y0)*(x2-x1)
+            if cross > 0:
+                signs.append( 1)   # left turn
+            elif cross < 0:
+                signs.append(-1)   # right turn
+            else:
+                signs.append( 0)   # straight / noise
+
+        # 2) Compress into segments of the same sign (ignore zeros)
+        segments = []
+        curr_sign = signs[0]
+        length = 1
+        for s in signs[1:]:
+            if s == curr_sign:
+                length += 1
+            else:
+                if curr_sign != 0 and length >= min_turn_frames:
+                    segments.append(curr_sign)
+                curr_sign = s
+                length = 1
+        # last segment
+        if curr_sign != 0 and length >= min_turn_frames:
+            segments.append(curr_sign)
+
+        # 3) Count sign-flips → each flip is half a curl
+        flips = sum(1 for a, b in zip(segments, segments[1:]) if a != b)
+        # full curls ≈ flips//2
+        return flips // 2
+        
+    def _filter_stationary(self, history, min_move=2):
+        filtered = []
+        last = None
+        for pt in history:
+            if last is None or (abs(pt[0]-last[0]) > min_move or abs(pt[1]-last[1]) > min_move):
+                filtered.append(pt)
+                last = pt
+        return filtered
+    
+    def _smooth_history(self, history, window_size=3):
+        smoothed = []
+        for i in range(len(history)):
+            x_vals = [pt[0] for pt in history[max(0, i-window_size):min(len(history), i+window_size+1)]]
+            y_vals = [pt[1] for pt in history[max(0, i-window_size):min(len(history), i+window_size+1)]]
+            smoothed.append((sum(x_vals)//len(x_vals), sum(y_vals)//len(y_vals)))
+        return smoothed
+
+
     def analyze_behaviour(
         self,
         entry: TraceData,
@@ -278,44 +448,49 @@ class BehaviourDetector:
         v_min: float,
         m_per_px: float
     ) -> TraceData:
-        """
-        Compute all metrics for a single TraceData entry, return updated model.
-        """
+        # 1) only track people
+        if entry.class_name != 'person':
+            return entry
+
+        # 2) compute zone-based dwell and bail if never visited
         history = entry.trace
-        dwell     = self.compute_dwell_time(history, fps, zone_pts)
-        pause     = self.compute_pause_duration(history, fps, v_min, m_per_px, zone_pts)
+
+        
+        dwell = self.compute_dwell_time(history, fps, zone_pts)
+        if dwell == 0.0:
+            return replace(entry,
+                dwell_time=0.0,
+                pause_duration=0.0,
+                avg_speed=0.0,
+                min_speed=0.0,
+                curl_count=0,
+                raw_loiter_score=0.0,
+                rule_loiter=False,
+                is_loitering=False
+            )
+
+        # 3) compute remaining metrics
+        # history = self._filter_stationary(history, min_move=1)
+        # history = self._smooth_history(history, window_size=2)
+        
+        pause      = self.compute_pause_duration(history, fps, v_min, m_per_px, zone_pts)
         avg_spd, min_spd = self.compute_speeds(history, fps, m_per_px)
-        radius    = self.compute_movement_radius(history, m_per_px)
-        # variance  = self.compute_path_variance(history, m_per_px)
-        raw_loiter_score =self.compute_raw_loiter_score(
-            dwell_time=dwell,
-            movement_radius=radius,
-            avg_speed=avg_spd,
-            pause_duration=pause
-        )
-        
-        is_loitering = self.check_loitering(
-            id=entry.id,
-            raw_loiter_score=raw_loiter_score
-        )
-        
-        rule_flag  = self.is_loitering_by_rule(
-            dwell_time=dwell,
-            movement_radius=radius,
-            avg_speed=avg_spd,
-            pause_duration=pause,
-            # path_variance=variance                                       
-        )
-        # first update numeric metrics
-        return replace(
-            entry,
-            dwell_time=dwell,
-            pause_duration=pause,
-            avg_speed=avg_spd,
-            min_speed=min_spd,
-            movement_radius=radius,
-            # path_variance=variance,
-            raw_loiter_score=raw_loiter_score,
-            rule_loiter=rule_flag,
-            is_loitering=is_loitering
+        curl_count = self.count_non_forward_events(history)
+
+        # 4) compute score & flags
+        raw_score  = self.compute_raw_loiter_score(dwell, curl_count, avg_spd, pause)
+        # rule_flag  = self.is_loitering_by_rule(dwell, curl_count, avg_spd, pause)
+        final_flag = self.check_loitering(entry.id, raw_score)
+
+        # 5) single replace with all updated fields
+        return replace(entry,
+            dwell_time       = dwell,
+            pause_duration   = pause,
+            avg_speed        = avg_spd,
+            min_speed        = min_spd,
+            curl_count       = curl_count,
+            raw_loiter_score = raw_score,
+            # rule_loiter      = rule_flag,
+            is_loitering     = final_flag,
+            trace=entry.trace
         )

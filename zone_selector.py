@@ -40,12 +40,3 @@ class ZoneSelector:
         cv2.destroyWindow("Define Zone")
         return pts
 
-    def contains(self, x: float, y: float) -> bool:
-        """
-        Returns True if point (x,y) lies inside the user-defined polygon.
-        """
-        return cv2.pointPolygonTest(
-            np.array(self.pts, dtype=np.int32),
-            (x, y),
-            False
-        ) >= 0

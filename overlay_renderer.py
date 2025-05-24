@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
 from typing import List
-from utils import draw_dashed_polygon
+from utils import draw_dashed_polygon, zone_contains
 from common_model import TraceData
 from zone_selector import ZoneSelector
 class OverlayRenderer:
@@ -16,8 +16,7 @@ class OverlayRenderer:
         frame: np.ndarray,
         fps: float,
         detection_on: bool,
-        detections: List[TraceData],
-        zone_selector: ZoneSelector
+        detections: List[TraceData]
     ) -> np.ndarray:
         # determine if any loiter alert exists
         zone_alert = any(det.is_loitering for det in detections)
@@ -29,7 +28,7 @@ class OverlayRenderer:
         self._draw_detection_boxes(frame, detections)
 
         # 3) trespass alerts
-        self._draw_trespass_alerts(frame, detections, zone_selector)
+        self._draw_trespass_alerts(frame, detections)
 
         # 4) FPS
         self._draw_fps(frame, fps)
@@ -98,8 +97,7 @@ class OverlayRenderer:
     def _draw_trespass_alerts(
         self,
         frame: np.ndarray,
-        detections: List[TraceData],
-        zone_selector: ZoneSelector
+        detections: List[TraceData]
     ) -> None:
         """
         Overlay "TRESPASS!" text at centroid for detections inside the zone.
@@ -107,7 +105,7 @@ class OverlayRenderer:
         for det in detections:
             x1, y1, x2, y2 = det.bbox
             cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
-            if zone_selector.contains(cx, cy):
+            if zone_contains(self.zone_pts, cx, cy):
                 cv2.putText(
                     frame,
                     "TRESPASS!",
