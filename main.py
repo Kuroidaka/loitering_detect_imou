@@ -27,7 +27,8 @@ class LoiteringDetectorApp:
 
     def __init__(self, rtsp_url: str):
         
-        self.zalo_client = ZaloAPI(phone=settings.ZALO_NUMBER, password=settings.ZALO_PASSWROD, imei=settings.ZALO_IMEI, cookies=settings.ZALO_COOKIES)
+        self.zalo_client = ZaloAPI(phone=settings.ZALO_NUMBER, password=settings.ZALO_PASSWORD, imei=settings.ZALO_IMEI, cookies=settings.ZALO_COOKIES)
+
         
         # Frame grabbing
         self.grabber = FrameGrabber(rtsp_url)
@@ -55,6 +56,7 @@ class LoiteringDetectorApp:
         Trigger an alert for a loitering detection.
         Override this method to integrate email, push notifications, etc.
         """
+        
         self.zalo_client.sendLocalImage(            
             imagePath=detected_file_path,
             thread_id=self.target_zalo_group_id,

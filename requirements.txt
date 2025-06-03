@@ -10,3 +10,4 @@ supervision==0.25.1
 tinycss2==1.4.0
 tomli==2.0.1
 ultralytics==8.3.130
+zlapi==1.0.3

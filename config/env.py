@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     TARGET_ZALO_GROUP_ID: str= Field(env="TARGET_ZALO_GROUP_ID", default="", description="")
     
     ZALO_NUMBER: str= Field(env="ZALO_NUMBER", default="", description="")
-    ZALO_PASSWROD: str= Field(env="ZALO_PASSWROD", default="", description="")
+    ZALO_PASSWORD: str= Field(env="ZALO_PASSWORD", default="", description="")
     ZALO_IMEI: str= Field(env="ZALO_IMEI", default="", description="")
     ZALO_COOKIES: dict= Field(env="ZALO_COOKIES", default="", description="")
 
